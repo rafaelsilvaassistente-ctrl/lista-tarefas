@@ -57,7 +57,7 @@
 
 1. **Clone o repositório**:
    ```bash
-   git clone https://github.com/rafaelsilvaassistente-ctrl/09-Listas-de-tarefas.git
+   git clone https://github.com/rafaelsilvaassistente-ctrl/lista-tarefas.git
    cd "09 Listas de tarefas"
    ```
 
