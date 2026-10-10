@@ -12,6 +12,7 @@ interface TaskRow {
   priority: Task['priority'];
   due_date: string;
   created_at: string;
+  user_id?: string;
 }
 
 function mapRowToTask(row: TaskRow): Task {
@@ -32,32 +33,51 @@ export class SupabaseTaskService implements TaskRepository {
     return isSupabaseConfigured() && supabase !== null;
   }
 
-  async getTasks(): Promise<Task[]> {
+  async getTasks(userId?: string): Promise<Task[]> {
     if (!this.isConfigured() || !supabase) {
       console.warn('Supabase não configurado. Utilizando fallback LocalStorage.');
-      return taskStorageService.getTasks();
+      return taskStorageService.getTasks(userId);
     }
 
-    const { data, error } = await supabase
+    // Se userId não foi passado explicitamente, tenta pegar da sessão ativa
+    let targetUserId = userId;
+    if (!targetUserId) {
+      const { data: { session } } = await supabase.auth.getSession();
+      targetUserId = session?.user?.id;
+    }
+
+    let query = supabase
       .from('tasks')
       .select('*')
       .order('created_at', { ascending: false });
 
+    // Se temos o ID do usuário, garantimos o filtro no nível da consulta
+    if (targetUserId) {
+      query = query.eq('user_id', targetUserId);
+    }
+
+    const { data, error } = await query;
+
     if (error) {
       console.error('Erro ao buscar tarefas no Supabase:', error.message);
-      // Fallback para manter o app funcionando mesmo em caso de erro temporário
-      return taskStorageService.getTasks();
+      return taskStorageService.getTasks(targetUserId);
     }
 
     return (data as TaskRow[]).map(mapRowToTask);
   }
 
-  async createTask(data: TaskFormData): Promise<Task> {
+  async createTask(data: TaskFormData, userId?: string): Promise<Task> {
     if (!this.isConfigured() || !supabase) {
-      return taskStorageService.createTask(data);
+      return taskStorageService.createTask(data, userId);
     }
 
-    const insertPayload = {
+    let targetUserId = userId;
+    if (!targetUserId) {
+      const { data: { session } } = await supabase.auth.getSession();
+      targetUserId = session?.user?.id;
+    }
+
+    const insertPayload: Record<string, unknown> = {
       title: data.title.trim(),
       description: data.description?.trim() || '',
       completed: false,
@@ -65,6 +85,10 @@ export class SupabaseTaskService implements TaskRepository {
       priority: data.priority,
       due_date: data.dueDate,
     };
+
+    if (targetUserId) {
+      insertPayload.user_id = targetUserId;
+    }
 
     const { data: createdRow, error } = await supabase
       .from('tasks')
@@ -81,8 +105,8 @@ export class SupabaseTaskService implements TaskRepository {
 
     // Mantém cópia local sincronizada para redundância
     try {
-      const localTasks = await taskStorageService.getTasks();
-      localStorage.setItem('taskflow_tasks_v1', JSON.stringify([newTask, ...localTasks]));
+      const localTasks = await taskStorageService.getTasks(targetUserId);
+      localStorage.setItem(`taskflow_tasks_${targetUserId || 'guest'}`, JSON.stringify([newTask, ...localTasks]));
     } catch {
       // Ignora falhas secundárias de cache local
     }

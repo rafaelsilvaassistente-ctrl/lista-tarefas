@@ -2,8 +2,10 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import type { Category, Task, TaskFilter, TaskFormData } from '../types/task';
 import { supabaseTaskService } from '../services/supabaseService';
 import { supabase } from '../services/supabaseClient';
+import { useAuth } from './useAuth';
 
 export function useTasks() {
+  const { user } = useAuth();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<TaskFilter>('TODAS');
@@ -13,34 +15,45 @@ export function useTasks() {
   const isSupabase = supabaseTaskService.isConfigured();
 
   const loadTasks = useCallback(async () => {
+    if (!user) {
+      setTasks([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       setLoading(true);
-      const data = await supabaseTaskService.getTasks();
+      const data = await supabaseTaskService.getTasks(user.id);
       setTasks(data);
     } catch (err) {
-      console.error('Falha ao carregar tarefas:', err);
+      console.error('Falha ao carregar tarefas do usuário:', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     loadTasks();
   }, [loadTasks]);
 
-  // Inscrição em tempo real no Supabase Realtime
+  // Inscrição em tempo real no Supabase Realtime para as tarefas do usuário autenticado
   useEffect(() => {
     const client = supabase;
-    if (!isSupabase || !client) return;
+    if (!isSupabase || !client || !user) return;
 
     const channel = client
-      .channel('tasks-realtime')
+      .channel(`tasks-realtime-${user.id}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'tasks' },
+        { 
+          event: '*', 
+          schema: 'public', 
+          table: 'tasks',
+          filter: `user_id=eq.${user.id}`,
+        },
         async () => {
           try {
-            const freshData = await supabaseTaskService.getTasks();
+            const freshData = await supabaseTaskService.getTasks(user.id);
             setTasks(freshData);
           } catch (error) {
             console.error('Erro na atualização em tempo real:', error);
@@ -52,10 +65,11 @@ export function useTasks() {
     return () => {
       client.removeChannel(channel);
     };
-  }, [isSupabase]);
+  }, [isSupabase, user]);
 
   const addTask = async (data: TaskFormData) => {
-    const created = await supabaseTaskService.createTask(data);
+    if (!user) throw new Error('Usuário não autenticado.');
+    const created = await supabaseTaskService.createTask(data, user.id);
     setTasks((prev) => {
       const exists = prev.some((t) => t.id === created.id);
       if (exists) return prev;
